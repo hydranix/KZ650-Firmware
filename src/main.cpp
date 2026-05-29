@@ -33,6 +33,13 @@
 #define BLINK_INTERVAL_MS 500
 
 ////////////////////////////////////////////////////////////////////////////////
+// Input debounce time in milliseconds (required)
+//   An input must hold a new level this long before it is accepted,
+//  rejecting mechanical switch chatter. Keep well below human reaction
+//   time so response still feels instant.
+#define DEBOUNCE_MS 20
+
+////////////////////////////////////////////////////////////////////////////////
 // Serial Baud rate (required)
 // Example values: 9600, 19200, (default) 115200, 921600
 #define SERIAL_BAUD_RATE 115200
@@ -78,6 +85,34 @@ Pin HighBeam{6};
 Pin Clutch{7};
 Pin StartBtn{8};
 Pin Inputs[]{Brake, HornBtn, LeftTurn, RightTurn, HighBeam, Clutch, StartBtn};
+
+////////////////////////////////////////////////////////////////////////////////
+// Debounced input state, indexed by pin number so it can be read by the
+//   same names used everywhere else (e.g. input_state[Brake]). Only the
+//  slots for the Inputs[] pins are ever touched.
+byte input_state[NUM_DIGITAL_PINS];          // last accepted (debounced) level
+byte input_last_raw[NUM_DIGITAL_PINS];        // last raw sample
+unsigned long input_changed_at[NUM_DIGITAL_PINS]; // millis() of last raw change
+
+// Re-sample every input and commit a new level only once it has been
+//   stable for DEBOUNCE_MS. Call once per loop() before reading state.
+void updateInputs()
+{
+  unsigned long now = millis();
+  for (const auto &p : Inputs)
+  {
+    byte raw = digitalRead(p);
+    if (raw != input_last_raw[p])
+    {
+      input_last_raw[p] = raw;
+      input_changed_at[p] = now;
+    }
+    else if (now - input_changed_at[p] >= DEBOUNCE_MS)
+    {
+      input_state[p] = raw;
+    }
+  }
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Outputs
@@ -149,6 +184,10 @@ void setup()
     DBG(p);
     DBG(" mode set to INPUT_PULLUP\n");
     pinMode(p, INPUT_PULLUP);
+
+    // seed debounce state so we start from the real level, not 0
+    input_state[p] = input_last_raw[p] = digitalRead(p);
+    input_changed_at[p] = millis();
   }
 
   for (const auto &p : Outputs)
@@ -188,30 +227,33 @@ void loop()
   // required
   timer.tick();
 
+  // refresh debounced input levels before acting on them
+  updateInputs();
+
   //================================================
   //================ Brakes
   //================================================
 
-  digitalWrite(BrakeLight, digitalRead(Brake));
+  digitalWrite(BrakeLight, input_state[Brake]);
 
   //================================================
   //================ Horn
   //================================================
 
-  digitalWrite(HornOut, digitalRead(HornBtn));
+  digitalWrite(HornOut, input_state[HornBtn]);
 
   //================================================
   //================ Turn Signals/Hazards
   //================================================
 
-  digitalWrite(LeftSignal, digitalRead(LeftTurn) ? HIGH : blinker_value);
-  digitalWrite(RightSignal, digitalRead(RightTurn) ? HIGH : blinker_value);
+  digitalWrite(LeftSignal, input_state[LeftTurn] ? HIGH : blinker_value);
+  digitalWrite(RightSignal, input_state[RightTurn] ? HIGH : blinker_value);
 
   //================================================
   //================ Headlight
   //================================================
 
-  digitalWrite(HeadLightHigh, digitalRead(HighBeam));
+  digitalWrite(HeadLightHigh, input_state[HighBeam]);
 
   //================================================
   //================ Electric Start
@@ -221,7 +263,7 @@ void loop()
   //   StartBtn and Clutch inputs are LOW
   //  This will cause the starter to stop (go HIGH)
   //   if either the start button or clutch is released
-  digitalWrite(Starter, (digitalRead(StartBtn) || digitalRead(Clutch)) ? HIGH : LOW);
+  digitalWrite(Starter, (input_state[StartBtn] || input_state[Clutch]) ? HIGH : LOW);
 }
 
 bool onTimer_toggleLED(void *arg)
