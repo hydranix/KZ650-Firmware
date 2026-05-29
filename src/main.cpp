@@ -12,6 +12,7 @@
 
 #include <Arduino.h>
 #include <arduino-timer.h>
+#include <avr/wdt.h>
 
 #pragma region Config
 //=================================// Config //===============================//
@@ -171,10 +172,19 @@ void setup()
 
   // turn on los beam headlight at all times
   digitalWrite(HeadLightLow, LOW);
+
+  // arm the watchdog last, after all slow init is done. If loop()
+  //   ever stalls for >2s the MCU resets to the safe boot state.
+  //   (the new-bootloader Nano runs Optiboot, which clears the WDT
+  //   on reset, so this can't latch into a reset loop)
+  wdt_enable(WDTO_2S);
 }
 
 void loop()
 {
+  // pet the watchdog; if a pass ever hangs, the MCU resets
+  wdt_reset();
+
   // required
   timer.tick();
 
